@@ -1,21 +1,32 @@
 #include <iostream>
 #include <functional>
 #include <memory>
+
 #include <boost/asio/coroutine.hpp>
+#include <boost/asio/yield.hpp>
 
-template<typename HandlerCoro>
-void foo(HandlerCoro && handler, int num)
+class Foo
 {
-    std::cout << "Hello, World! " << num << std::endl;
-    handler();
-}
+public:
+    Foo() = default;
 
-class _connection :
-        public std::enable_shared_from_this<_connection>,
+    template<typename HandlerCoro>
+    void operator()(HandlerCoro && handler)
+    {
+        int value;
+        std::cin >> value;
+        std::cout << "Foo next: " << value << std::endl;
+
+        handler();
+    }
+};
+
+class connection :
+        public std::enable_shared_from_this<connection>,
         private boost::asio::coroutine
 {
 public:
-    _connection()
+    connection()
     {
         std::cout << "ctor" << std::endl;
     }
@@ -23,22 +34,42 @@ public:
     void start()
     {
         std::cout << "enter " << std::endl;
-        BOOST_ASIO_CORO_REENTER(this)
+        auto self = shared_from_this();
+        auto funcThis = [self] { self->start(); };
+        Foo foo;
+        reenter(this)
         {
-            BOOST_ASIO_CORO_YIELD
+            yield
             {
                 std::cout << "yield 1" << std::endl;
-                auto self = shared_from_this();
-                auto funcThis = std::bind(&_connection::start, self);
-                foo(funcThis, 1);
+                foo(funcThis);
             }
-            BOOST_ASIO_CORO_YIELD
+            yield
             {
                 std::cout << "yield 2" << std::endl;
-                auto self = shared_from_this();
-                auto funcThis = std::bind(&_connection::start, self);
-                foo(funcThis, 2);
+                foo(funcThis);
             }
+        }
+
+        if (self->is_complete())
+        {
+            std::cout << "is complete" << std::endl;
+        }
+    }
+
+    void generate()
+    {
+        int num = 0;
+        auto self = shared_from_this();
+        auto func = [self]() {
+            static int value = 0;
+            std::cout << value << std::endl;
+            ++value;
+            if (value < 10) self->generate();
+        };
+        reenter(this) for(;;)
+        {
+            yield func();
         }
     }
 
@@ -47,7 +78,9 @@ public:
 
 int main()
 {
-    auto connect = std::make_shared<_connection>();
+    auto connect = std::make_shared<connection>();
     connect->start();
+//    connect->generate();
+
     return 0;
 }
